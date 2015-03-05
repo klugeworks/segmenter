@@ -7,6 +7,10 @@ import time
 import glob
 from urllib2 import urlopen
 from urlparse import urlparse
+import tempfile
+import subprocess
+import shutil
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -17,22 +21,24 @@ def parse_arguments():
     parser._optionals.title = "Options"
 
     parser.add_argument('-p', '--audio-url', help='URL from which to stream audio',
-                        type=str, required=True)
-    parser.add_argument('-c', '--chunk-size', help='Approximate chunk size in seconds',
-                        type=int, required=True)
-    parser.add_argument('-o', '--output', help='URL from which to stream audio',
-                        type=str, required=True)
+                        type=str, default="http://edge.espn.cdn.abacast.net/espn-wepnmp3-32?source=tunein")
+    parser.add_argument('-k', '--kluge-web-server', help='URL to post audio',
+                        type=str, default="http://kluge-web.marathon.mesos:5000")
+    parser.add_argument('-c', '--chunk-size', help='Chunk size in bytes',
+                        type=int, default=250000)
+    parser.add_argument('-r', '--rate', help='Rate control: sleep time in seconds between pulls',
+                        type=int, default=0)
     return parser.parse_args()
 
 
-def get_stream_chunk(stream_url, duration):
+def get_stream_chunk(stream_url, chunk_size, duration):
     not_ready = True
     buffer = ''
     try:
         stream = urlopen(stream_url)
         start_time = time.time()
         while not_ready:
-            buffer += (stream.read(44100))
+            buffer += (stream.read())
             if time.time() - start_time > duration:
                 not_ready = False
     except Exception as e:
@@ -40,12 +46,68 @@ def get_stream_chunk(stream_url, duration):
     return buffer
 
 
+def get_stream_chunk2(stream_url, chunk_size, duration):
+    r = requests.get(stream_url, stream=True)
+    buffer = ''
+    count = 0
+    for b in r.iter_content():
+        buffer += b
+        count += 1
+        if count == chunk_size:
+            break
+    return buffer
+
+
 def main():
     args = parse_arguments()
-    stream = urlopen(args.audio_url)
-    buff = get_stream_chunk(args.audio_url, args.chunk_size)
-    with open(args.output, 'wb') as outfile:
-        outfile.write(buff)
+
+    # Audio connection
+    audio_server = urlparse(args.audio_url)
+    host = str(audio_server.hostname)
+
+    directory_name = ""
+
+    chunkid = 1
+    running = True
+    timestamp = str(time.time()).split(".")[0]
+    try:
+        while running:
+            print "Reading bytes from stream"
+            buff = get_stream_chunk2(args.audio_url, args.chunk_size, 5)
+
+            directory_name = tempfile.mkdtemp()
+            raw_file = directory_name + "/radio.mp3"
+            with open(directory_name + "/radio.mp3", 'wb') as outfile:
+                outfile.write(buff)
+
+            mulaw_file = directory_name + "/radio.ul"
+            sox_command = "sox -V %s -r 8000 -b 8 -c 1 -t ul %s" % (raw_file, mulaw_file)
+
+            print mulaw_file
+            return_code = subprocess.call(sox_command, shell=True)
+
+            if not return_code == 0:
+                shutil.rmtree(directory_name)
+                continue
+
+            if return_code:
+                print "Chunk of radio data converted to mulaw"
+
+            curl_command = 'curl -F "docid={0}" -F "chunkid={1}" -F "name={2}" ' \
+                           '-F "bytes=@{3}" ' \
+                           '{4}/jobs/english'.format(host + "-" + timestamp, str(chunkid), host + "-" + str(chunkid), mulaw_file, args.kluge_web_server)
+
+            print curl_command
+            return_code = subprocess.call(curl_command, shell=True)
+
+            if return_code:
+                print "Audio posted to kluge-web"
+
+            chunkid += 1
+            time.sleep(args.rate)
+    finally:
+        # Clean up the directory yourself
+        shutil.rmtree(directory_name)
 
 
 if __name__ == '__main__':
