@@ -2,10 +2,7 @@
 
 import argparse
 import logging
-import os
 import time
-import glob
-from urllib2 import urlopen
 from urlparse import urlparse
 import tempfile
 import subprocess
@@ -31,16 +28,11 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_stream_chunk(stream_url, chunk_size):
+def gen_stream_chunk(stream_url, chunk_size):
     r = requests.get(stream_url, stream=True)
-    buffer = ''
-    count = 0
-    for b in r.iter_content():
-        buffer += b
-        count += 1
-        if count == chunk_size:
-            break
-    return buffer
+    print "Starting to read bytes from stream"
+    for b in r.iter_content(chunk_size=chunk_size):
+        yield b
 
 
 def main():
@@ -51,15 +43,11 @@ def main():
     host = str(audio_server.hostname)
 
     directory_name = ""
-
     chunkid = 1
-    running = True
     timestamp = str(time.time()).split(".")[0]
     try:
-        while running:
-            print "Reading bytes from stream"
-            buff = get_stream_chunk(args.audio_url, args.chunk_size)
-
+        for buff in gen_stream_chunk(args.audio_url, args.chunk_size):
+            print "Received bytes from stream"
             directory_name = tempfile.mkdtemp()
             raw_file = directory_name + "/radio.mp3"
             with open(directory_name + "/radio.mp3", 'wb') as outfile:
