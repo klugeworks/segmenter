@@ -1,0 +1,11 @@
+FROM centos
+
+MAINTAINER noone
+
+RUN ["yum", "install", "-y", "python-virtualenv", "lame", "sox", "curl"]
+WORKDIR /segmenter/
+RUN ["virtualenv", "env"]
+ADD requirements.txt /segmenter/
+RUN ["/segmenter/env/bin/pip", "install", "-r", "/segmenter/requirements.txt"]
+ADD  . /segmenter/
+CMD /segmenter/env/bin/python /segmenter/segmenter2.py
